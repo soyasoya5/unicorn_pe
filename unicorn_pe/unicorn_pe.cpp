@@ -1107,7 +1107,7 @@ int main(int argc, char **argv)
 
 	if (argc < 2)
 	{
-		printf("usage: unicorn_pe (filename) [-k] [-disasm]\n");
+		printf("usage: unicorn_pe (filename) [-k] [-disasm] [-packed] [-boundcheck] [-dump]\n");
 		return 0;
 	}
 
@@ -1194,7 +1194,7 @@ int main(int argc, char **argv)
 		printf("failed to MapImage\n");
 		return 0;
 	}
-    // LDR_DATA_TABLE_ENTRY_BASE_T* p= MapResult.result()->
+	// LDR_DATA_TABLE_ENTRY_BASE_T* p= MapResult.result()->
 	ctx.m_ImageBase = MapResult.result()->baseAddress;
 	ctx.m_ImageEnd = MapResult.result()->baseAddress + MapResult.result()->size;
 	ctx.m_ImageEntry = ctx.m_ImageBase + ExtractEntryPointRva((PVOID)MapResult.result()->imgPtr);

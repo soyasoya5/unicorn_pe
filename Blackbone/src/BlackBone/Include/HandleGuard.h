@@ -1,90 +1,138 @@
 #pragma once
 #include "Winheaders.h"
+#include <memory>
 
 namespace blackbone
 {
 
-/// <summary>
-/// Strong exception guarantee
-/// </summary>
-template<typename handle_t, auto close_fn, handle_t zero_handle>
-class HandleGuard
-{
-public:
-    explicit HandleGuard( handle_t handle = zero_handle ) noexcept
-        : _handle( handle ) 
-    { 
-    }
-
-    HandleGuard( HandleGuard&& rhs ) noexcept
-        : _handle( rhs._handle )
+    template<typename T>
+    struct non_zero
     {
-        rhs._handle = zero_handle;
-    }
+        static bool call(T handle) noexcept
+        {
+            return intptr_t(handle) != 0;
+        }
+    };
 
-    ~HandleGuard()
+    template<typename T>
+    struct non_negative
     {
-        if (_handle != zero_handle)
-            close_fn( _handle );
-    }
+        static bool call(T handle) noexcept
+        {
+            return intptr_t(handle) > 0;
+        }
+    };
 
-    HandleGuard( const HandleGuard& ) = delete;
-    HandleGuard& operator =( const HandleGuard& ) = delete;
-
-    HandleGuard& operator =( HandleGuard&& rhs ) noexcept
+    template<template<typename> typename wrapped_t, typename T>
+    struct with_pseudo_t
     {
-        if (std::addressof( rhs ) == this)
+        static bool call(T handle) noexcept
+        {
+            if (wrapped_t<T>::call(handle))
+                return true;
+
+            // Check if it's a pseudo handle
+            auto h = (HANDLE)(uintptr_t)handle;
+            return h == GetCurrentProcess() || h == GetCurrentThread();
+        }
+    };
+
+    template<template<typename> typename wrapped_t>
+    struct with_pseudo
+    {
+        template<typename T>
+        using type = with_pseudo_t<wrapped_t, T>;
+    };
+
+    /// <summary>
+    /// Strong exception guarantee
+    /// </summary>
+    template<typename handle_t, auto close, template<typename> typename is_valid = non_negative>
+    class HandleGuard
+    {
+    public:
+        static constexpr handle_t zero_handle = handle_t(0);
+
+    public:
+        explicit HandleGuard(handle_t handle = zero_handle) noexcept
+            : _handle(handle)
+        {
+        }
+
+        HandleGuard(HandleGuard&& rhs) noexcept
+            : _handle(rhs._handle)
+        {
+            rhs._handle = zero_handle;
+        }
+
+        ~HandleGuard()
+        {
+            if (non_negative<handle_t>::call(_handle))
+                close(_handle);
+        }
+
+        HandleGuard(const HandleGuard&) = delete;
+        HandleGuard& operator =(const HandleGuard&) = delete;
+
+        HandleGuard& operator =(HandleGuard&& rhs) noexcept
+        {
+            if (std::addressof(rhs) == this)
+                return *this;
+
+            reset(rhs._handle);
+            rhs._handle = zero_handle;
+
             return *this;
+        }
 
-        reset( rhs._handle );
-        rhs._handle = zero_handle;
+        HandleGuard& operator =(handle_t handle) noexcept
+        {
+            reset(handle);
+            return *this;
+        }
 
-        return *this;
-    }
+        void reset(handle_t handle = zero_handle) noexcept
+        {
+            if (handle == _handle)
+                return;
 
-    HandleGuard& operator =( handle_t handle ) noexcept
-    {
-        reset( handle );
-        return *this;
-    }
+            if (non_negative<handle_t>::call(_handle))
+                close(_handle);
 
-    void reset( handle_t handle = zero_handle ) noexcept
-    {
-        if (handle == _handle)
-            return;
+            _handle = handle;
+        }
 
-        if (_handle != zero_handle)
-            close_fn( _handle );
+        handle_t release() noexcept
+        {
+            auto tmp = _handle;
+            _handle = zero_handle;
+            return tmp;
+        }
 
-        _handle = handle;
-    }
+        handle_t get() const noexcept { return _handle; }
+        bool valid() const noexcept { return is_valid<handle_t>::call(_handle); }
 
-    handle_t release() noexcept
-    {
-        auto tmp = _handle;
-        _handle = zero_handle;
-        return tmp;
-    }
+        operator handle_t() const noexcept { return _handle; }
+        explicit operator bool() const noexcept { return valid(); }
 
-    inline handle_t get() const noexcept { return _handle; }
+        handle_t* operator &() noexcept { return &_handle; }
 
-    inline operator handle_t() const noexcept { return _handle; }
-    inline explicit operator bool() const noexcept { return _handle != zero_handle; }
+        bool operator ==(const HandleGuard& rhs) const noexcept { return _handle == rhs._handle; }
+        bool operator <(const HandleGuard& rhs) const noexcept { return _handle < rhs._handle; }
 
-    inline handle_t* operator &() noexcept { return &_handle; }
+    private:
+        handle_t _handle;
+    };
 
-    inline bool operator ==( const HandleGuard& rhs ) const noexcept { return _handle == rhs._handle; }
-    inline bool operator <( const HandleGuard& rhs ) const noexcept { return _handle < rhs._handle; }
 
-private:
-    handle_t _handle;
-};
+    using Handle = HandleGuard<HANDLE, &CloseHandle>;
+    using ProcessHandle = HandleGuard<HANDLE, &CloseHandle, with_pseudo<non_negative>::type>;
+    using ACtxHandle = HandleGuard<HANDLE, &ReleaseActCtx>;
+    using RegHandle = HandleGuard<HKEY, &RegCloseKey>;
+    using Mapping = HandleGuard<void*, &UnmapViewOfFile, non_zero>;
 
-using Handle        = HandleGuard<HANDLE, &CloseHandle, nullptr>;
-using FileHandle    = HandleGuard<HANDLE, &CloseHandle, INVALID_HANDLE_VALUE>;
-using ACtxHandle    = HandleGuard<HANDLE, &ReleaseActCtx, INVALID_HANDLE_VALUE>;
-using FileMapHandle = HandleGuard<void*,  &UnmapViewOfFile, nullptr>;
-using SnapHandle    = FileHandle;
-using RegHandle     = HandleGuard<HKEY,   &RegCloseKey, nullptr>;
-
+    // unicorn_pe compatibility
+    using FileHandle = HandleGuard<HANDLE, &CloseHandle, non_negative>;
+    using FileMapHandle = Mapping;
+    using SnapHandle = FileHandle;
 }
